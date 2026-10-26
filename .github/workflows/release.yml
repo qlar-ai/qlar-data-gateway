@@ -55,8 +55,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/pusakaai/data-gateway:${{ steps.version.outputs.number }}
-            ghcr.io/pusakaai/data-gateway:latest
+            ghcr.io/qlar-ai/qlar-data-gateway:${{ steps.version.outputs.number }}
+            ghcr.io/qlar-ai/qlar-data-gateway:latest
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
