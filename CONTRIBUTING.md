@@ -23,7 +23,7 @@ typical utility.
 ## Getting set up
 
 ```bash
-git clone https://github.com/pusakaai/data-gateway.git
+git clone https://github.com/qlar-ai/qlar-data-gateway.git
 cd db-gateway
 python -m venv .venv && . .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -e ".[dev,all]"

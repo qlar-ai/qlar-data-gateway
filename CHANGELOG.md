@@ -11,6 +11,20 @@ does not change the protocol version.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-27
+
+### Fixed
+
+- **Release image.** The Release workflow pushed the Docker image to
+  `ghcr.io/pusakaai/data-gateway`, an org this repository no longer belongs to, so the 0.2.1
+  release failed at the push and no 0.2.1 image was published. Images are now published to
+  `ghcr.io/qlar-ai/qlar-data-gateway`. 0.2.2 is otherwise identical to 0.2.1.
+
+### Changed
+
+- **Docs point at the new home.** README, INSTALL, SECURITY, CONTRIBUTING, RELEASING, the
+  example compose file and the package URLs now use `qlar-ai/qlar-data-gateway` and pin 0.2.2.
+
 ## [0.2.1] - 2026-10-26
 
 ### Changed
@@ -286,7 +300,8 @@ Protocol version 1.
 - `test-db`, `enroll`, `fingerprint`, `run` and `version` commands, a Docker image, and
   systemd/Kubernetes deployment guides.
 
-[Unreleased]: https://github.com/qlar-ai/qlar-data-gateway/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/qlar-ai/qlar-data-gateway/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/qlar-ai/qlar-data-gateway/releases/tag/v0.2.2
 [0.2.1]: https://github.com/qlar-ai/qlar-data-gateway/releases/tag/v0.2.1
 [0.2.0]: https://github.com/pusakaai/data-gateway/releases/tag/v0.2.0
 [0.1.7]: https://github.com/pusakaai/data-gateway/releases/tag/v0.1.7

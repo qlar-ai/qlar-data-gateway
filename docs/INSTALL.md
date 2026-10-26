@@ -70,7 +70,7 @@ more of the work than on the other three. Do not skip it.
 
 ```bash
 mkdir -p /opt/qlar-gateway/state && cd /opt/qlar-gateway
-curl -o .env https://raw.githubusercontent.com/pusakaai/data-gateway/main/.env.example
+curl -o .env https://raw.githubusercontent.com/qlar-ai/qlar-data-gateway/main/.env.example
 chmod 600 .env
 # edit .env
 ```
@@ -83,7 +83,7 @@ state volume, which the image already owns:
 ```bash
 chown -R 10001:10001 state     # the uid the image runs as
 docker run --rm -it -v "$PWD/state:/state" \
-  ghcr.io/pusakaai/data-gateway:0.2.0 --env-file /state/.env test-db --init
+  ghcr.io/qlar-ai/qlar-data-gateway:0.2.2 --env-file /state/.env test-db --init
 ```
 
 That writes `state/.env`, which every later command then names the same way
@@ -94,7 +94,7 @@ running, so there is nothing to come back and type once it has been approved.
 ```bash
 docker run -d --name qlar-gateway --restart unless-stopped \
   --env-file .env -v "$PWD/state:/state" \
-  ghcr.io/pusakaai/data-gateway:0.2.0 enroll
+  ghcr.io/qlar-ai/qlar-data-gateway:0.2.2 enroll
 
 docker logs -f qlar-gateway
 ```
@@ -123,8 +123,8 @@ sudo useradd --system --home /opt/qlar-gateway --shell /usr/sbin/nologin qlar
 sudo mkdir -p /opt/qlar-gateway && cd /opt/qlar-gateway
 sudo python3 -m venv venv
 sudo ./venv/bin/pip install --upgrade "qlar-data-gateway[postgresql] @ \
-  https://github.com/pusakaai/data-gateway/releases/download/v0.2.0/qlar_data_gateway-0.2.0-py3-none-any.whl"
-sudo ./venv/bin/qlar-gateway version     # should print 0.2.0
+  https://github.com/qlar-ai/qlar-data-gateway/releases/download/v0.2.2/qlar_data_gateway-0.2.2-py3-none-any.whl"
+sudo ./venv/bin/qlar-gateway version     # should print 0.2.2
 sudo chown -R qlar:qlar /opt/qlar-gateway
 ```
 
@@ -201,7 +201,7 @@ spec:
     spec:
       containers:
         - name: gateway
-          image: ghcr.io/pusakaai/data-gateway:0.2.0
+          image: ghcr.io/qlar-ai/qlar-data-gateway:0.2.2
           args: ["enroll"]   # idempotent: an enrolled pod goes straight to serving
           envFrom:
             - secretRef: { name: qlar-gateway-env }

@@ -54,13 +54,13 @@ minor.
 
 The `Release` workflow then refuses to proceed if the tag and `__version__` disagree,
 builds the sdist and wheel, writes SHA-256 checksums, builds and pushes
-`ghcr.io/pusakaai/data-gateway:<version>` and `:latest`, and creates the GitHub Release with
+`ghcr.io/qlar-ai/qlar-data-gateway:<version>` and `:latest`, and creates the GitHub Release with
 the artifacts attached.
 
 7. **Verify the published artifacts** the way a customer would:
    ```bash
-   docker pull ghcr.io/pusakaai/data-gateway:0.1.0
-   docker run --rm ghcr.io/pusakaai/data-gateway:0.1.0 version
+   docker pull ghcr.io/qlar-ai/qlar-data-gateway:0.1.0
+   docker run --rm ghcr.io/qlar-ai/qlar-data-gateway:0.1.0 version
    sha256sum -c qlar_data_gateway-0.1.0.sha256
    ```
 8. **Point the CMS download page at the new release** and check that the version it
