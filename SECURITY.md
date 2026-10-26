@@ -45,4 +45,4 @@ installing:
 sha256sum -c qlar_data_gateway-0.1.6.sha256
 ```
 
-Docker images are published to `ghcr.io/pusakaai/data-gateway` and can be pinned by digest.
+Docker images are published to `ghcr.io/qlar-ai/qlar-data-gateway` and can be pinned by digest.

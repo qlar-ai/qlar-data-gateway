@@ -15,7 +15,7 @@
 
 services:
   gateway:
-    image: ghcr.io/pusakaai/data-gateway:0.2.0
+    image: ghcr.io/qlar-ai/qlar-data-gateway:0.2.2
     container_name: qlar-gateway
     restart: unless-stopped
     command: ["enroll"]
