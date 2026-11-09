@@ -70,6 +70,23 @@ def execute(
     except (ValueError, ImportError) as error:
         return _failure(CATEGORY_CONNECTION, None, str(error), started)
 
+    allowlist = frozenset() if catalog_only else settings.table_allowlist
+    if settings.is_file_source:
+        try:
+            allowlist = _file_source_allowlist(settings, catalog_only=catalog_only)
+        except Exception as error:  # noqa: BLE001 - a folder that cannot be read is a payload
+            described = provider.classify_error(error) or DriverError(
+                category=CATEGORY_CONNECTION, driver_code=None, message=f"{type(error).__name__}: {error}"
+            )
+            return _failure(described.category, described.driver_code, described.message, started)
+        if not catalog_only and not allowlist:
+            return _failure(
+                "rejected",
+                None,
+                "no tables were found in PARQUET_ROOT (or none survive TABLE_ALLOWLIST)",
+                started,
+            )
+
     try:
         guard_check(
             sql,
@@ -77,7 +94,7 @@ def execute(
             catalog_only=catalog_only,
             # A schema-discovery job is confined to catalog objects instead, which the
             # customer's table allowlist would otherwise reject outright.
-            allowlist=frozenset() if catalog_only else settings.table_allowlist,
+            allowlist=allowlist,
         )
     except SqlRejected as rejection:
         # Its own category: this is not the database refusing a statement, so Qlar must not
@@ -169,11 +186,14 @@ def test_connection(settings: DatabaseSettings) -> ExecutionResult:
 
     connection = None
     try:
-        connection = provider.connect(settings)
-        cursor = connection.cursor()
-        cursor.execute(probes[settings.provider])
-        record = cursor.fetchone()
-        version = str(record[0]) if record else ""
+        if settings.is_file_source:
+            version = _describe_file_source(settings)
+        else:
+            connection = provider.connect(settings)
+            cursor = connection.cursor()
+            cursor.execute(probes[settings.provider])
+            record = cursor.fetchone()
+            version = str(record[0]) if record else ""
 
         return ExecutionResult(
             status="ok",
@@ -217,6 +237,11 @@ def account_can_write(settings: DatabaseSettings) -> bool | None:
     """
     try:
         provider = get_provider(settings.provider)
+        if settings.is_file_source:
+            # No account to ask; whether this process could change the files is the same
+            # question asked of the file system.
+            return provider.root_is_writable(settings)
+
         sql = provider.privilege_check_sql()
         if sql is None:
             return None
@@ -242,6 +267,46 @@ def account_can_write(settings: DatabaseSettings) -> bool | None:
             connection.close()
     except Exception:
         return None
+
+
+def _file_source_allowlist(settings: DatabaseSettings, *, catalog_only: bool) -> frozenset[str]:
+    """The tables a Parquet job may read: the discovered views, narrowed by TABLE_ALLOWLIST.
+
+    Unlike a database, where the allowlist is an optional extra, here it is always on: the
+    views are the only things a statement may name, because anything else in a DuckDB FROM
+    clause is a way to read a file. A schema-discovery job re-scans the folder first, which
+    is how a new folder becomes a new table on "Refresh Schema".
+    """
+    from . import parquet_catalog
+
+    if settings.parquet is None:
+        raise ValueError("DB_PROVIDER=parquet needs PARQUET_ROOT")
+
+    if catalog_only:
+        parquet_catalog.refresh(settings.parquet)
+        return frozenset()
+
+    names = parquet_catalog.get(settings.parquet).table_names
+    if not settings.table_allowlist:
+        return names
+    operator = {entry.rpartition(".")[2] for entry in settings.table_allowlist}
+    return frozenset(name for name in names if name in operator)
+
+
+def _describe_file_source(settings: DatabaseSettings) -> str:
+    """`DuckDB v2.0.0 - 3 tables in /data/parquet (1 skipped)`, re-scanning the folder."""
+    from . import parquet_catalog
+
+    if settings.parquet is None:
+        raise ValueError("DB_PROVIDER=parquet needs PARQUET_ROOT")
+
+    catalog = parquet_catalog.refresh(settings.parquet, force=True)
+    count = len(catalog.tables)
+    tables = f"{count} table{'s' if count != 1 else ''}"
+    text = f"DuckDB {catalog.duckdb_version} - {tables} in {settings.parquet.root}"
+    if catalog.problems:
+        text += f" ({len(catalog.problems)} skipped: {catalog.problems[0]})"
+    return text
 
 
 def _failure(category: str, code: str | None, message: str, started: float) -> ExecutionResult:

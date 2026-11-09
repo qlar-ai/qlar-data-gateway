@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "qlar-data-gateway"
 dynamic = ["version"]
-description = "On-premise SQL access gateway for Qlar's SQL Database Reader plugin — outbound-only, no inbound ports."
+description = "On-premise SQL access gateway for Qlar's SQL Database Reader plugin (databases and Parquet files) — outbound-only, no inbound ports."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
@@ -34,7 +34,11 @@ postgresql = ["psycopg[binary]>=3.1"]
 mysql = ["PyMySQL>=1.1"]
 sqlserver = ["pymssql>=2.3"]
 oracle = ["oracledb>=2.2"]
-all = ["psycopg[binary]>=3.1", "PyMySQL>=1.1", "pymssql>=2.3", "oracledb>=2.2"]
+# DuckDB reads the files; pytz is what DuckDB needs to hand back TIMESTAMP WITH TIME ZONE.
+parquet = ["duckdb>=1.2", "pytz>=2023.3"]
+all = [
+    "psycopg[binary]>=3.1", "PyMySQL>=1.1", "pymssql>=2.3", "oracledb>=2.2", "duckdb>=1.2", "pytz>=2023.3",
+]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.6"]
 
 [project.scripts]
