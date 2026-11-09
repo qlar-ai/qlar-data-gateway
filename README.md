@@ -64,15 +64,15 @@ of the allowlist.
 Docker (recommended — no Python on the host):
 
 ```bash
-docker pull ghcr.io/qlar-ai/qlar-data-gateway:0.2.2
+docker pull ghcr.io/qlar-ai/qlar-data-gateway:0.3.0
 ```
 
 Or with pip, installing only the driver you need. The wheel comes from the release rather
 than from PyPI, where this package is not published:
 
 ```bash
-pip install --upgrade "qlar-data-gateway[postgresql] @ https://github.com/qlar-ai/qlar-data-gateway/releases/download/v0.2.2/qlar_data_gateway-0.2.2-py3-none-any.whl"
-qlar-gateway version     # should print 0.2.2
+pip install --upgrade "qlar-data-gateway[postgresql] @ https://github.com/qlar-ai/qlar-data-gateway/releases/download/v0.3.0/qlar_data_gateway-0.3.0-py3-none-any.whl"
+qlar-gateway version     # should print 0.3.0
 ```
 
 Swap `postgresql` for `mysql`, `sqlserver`, `oracle`, `parquet` (a folder of Parquet files, see
@@ -168,7 +168,7 @@ Docker, which needs the fingerprint out of the logs because the container is det
 ```bash
 docker run -d --name qlar-gateway --restart unless-stopped \
   --env-file .env -v "$PWD/state:/state" \
-  ghcr.io/qlar-ai/qlar-data-gateway:0.2.2 enroll
+  ghcr.io/qlar-ai/qlar-data-gateway:0.3.0 enroll
 
 docker logs -f qlar-gateway   # read the fingerprint, approve, watch it connect
 ```
