@@ -147,6 +147,12 @@ public key from somewhere.
 }
 ```
 
+`providers` holds the one source the gateway serves: `postgresql`, `mysql`, `sqlserver`,
+`oracle`, or `parquet` (a folder of Parquet files queried with DuckDB on the gateway, from
+0.3.0). For `parquet` the SQL dialect is DuckDB's, an `introspect` job may read only
+`information_schema`, and an `execute_query` job may name only the tables the gateway
+discovered. None of this changes the wire format, so the protocol version is unchanged.
+
 Response:
 
 ```json

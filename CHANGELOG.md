@@ -11,6 +11,26 @@ does not change the protocol version.
 
 ## [Unreleased]
 
+### Added
+
+- **Parquet files** (`DB_PROVIDER=parquet`). The gateway answers from a folder of Parquet
+  files, queried in-process with DuckDB on your server; Qlar never receives the files. Each
+  sub-folder (Hive partitions such as `year=2025/` become columns) and each `.parquet` file
+  directly in `PARQUET_ROOT` is a table; an optional `PARQUET_TABLES_FILE` (JSON or TOML)
+  renames, adds, excludes and describes tables and columns. Install with the new `[parquet]`
+  extra (`duckdb>=1.2`, `pytz`); the Docker image includes it. See `docs/PARQUET.md`.
+- Resource settings for Parquet: `PARQUET_MEMORY_LIMIT` (default 50% of RAM),
+  `PARQUET_THREADS`, `PARQUET_TEMP_DIR`, `PARQUET_MAX_TEMP_SIZE` (20 GB); and
+  `MAX_CONCURRENT_QUERIES` defaults to 1 for Parquet.
+- Guard: for Parquet every table reference must be a discovered table — table functions,
+  file paths in `FROM`, `COPY`, `ATTACH`, `INSTALL`, `PRAGMA`, `EXPORT` and `getenv` are
+  refused. DuckDB is locked (`allowed_directories`, `enable_external_access=false`,
+  `lock_configuration=true`). `COPY`/`PRAGMA`/`ATTACH`/`DETACH`/`INSTALL`/`EXPORT` statement
+  nodes are refused for every provider.
+
+The protocol version is unchanged (2): `parquet` is a new value of the enrolment's
+`providers` list, not a wire-format change.
+
 ## [0.2.2] - 2026-10-27
 
 ### Fixed

@@ -26,6 +26,9 @@ your database, and sends the rows back. Nothing connects *in*.
 | Queries auditable in your own systems | no | **yes** — local JSONL audit log |
 | You decide which tables are reachable | in Qlar's UI | **also in your own config file** |
 
+It can also answer from a **folder of Parquet files** on the same server, queried there with
+DuckDB — the files never leave your network. See [docs/PARQUET.md](docs/PARQUET.md).
+
 ## What it will and will not run
 
 The gateway assumes Qlar could be compromised and checks every statement itself:
@@ -72,7 +75,8 @@ pip install --upgrade "qlar-data-gateway[postgresql] @ https://github.com/qlar-a
 qlar-gateway version     # should print 0.2.2
 ```
 
-Swap `postgresql` for `mysql`, `sqlserver`, `oracle` or `all`.
+Swap `postgresql` for `mysql`, `sqlserver`, `oracle`, `parquet` (a folder of Parquet files, see
+[docs/PARQUET.md](docs/PARQUET.md)) or `all`.
 
 The `version` check is there because pip is quiet in the one case that looks like a
 failure: asked for a version that is already installed, it downloads the wheel, installs
@@ -200,12 +204,13 @@ the questions entirely.
 | `QLAR_BASE_URL` | — | your Qlar endpoint (required) |
 | `QLAR_ENROLLMENT_CODE` | — | one-time code, only needed for `enroll` |
 | `QLAR_GATEWAY_NAME` | hostname | label shown in the CMS |
-| `DB_PROVIDER` | — | `postgresql`, `mysql`, `sqlserver`, `oracle` |
+| `DB_PROVIDER` | — | `postgresql`, `mysql`, `sqlserver`, `oracle`, `parquet` |
+| `PARQUET_ROOT` and `PARQUET_*` | — | for `parquet` only, instead of `DB_HOST`…: see [docs/PARQUET.md](docs/PARQUET.md) |
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | — | connection details |
 | `DB_OPT_*` | — | extra driver options, e.g. `DB_OPT_SSLMODE=verify-full` |
 | `DB_STATEMENT_TIMEOUT_SECONDS` | `30` | server-side statement timeout |
 | `MAX_RESULT_BYTES` | `10485760` | ceiling on one result |
-| `MAX_CONCURRENT_QUERIES` | `5` | protects your database from a busy agent |
+| `MAX_CONCURRENT_QUERIES` | `5` (`1` for parquet) | protects your database from a busy agent |
 | `TABLE_ALLOWLIST` | empty | comma-separated; when set, nothing else is readable |
 | `AUDIT_LOG_FILE` | `./audit/queries.jsonl` | local audit log; empty disables it |
 | `POLL_TIMEOUT_SECONDS` | `25` | long-poll hold time |
@@ -226,6 +231,7 @@ the questions entirely.
 ## Documentation
 
 - [docs/INSTALL.md](docs/INSTALL.md) — detailed install, systemd, Docker, Kubernetes, troubleshooting
+- [docs/PARQUET.md](docs/PARQUET.md) — answering from a folder of Parquet files (DuckDB)
 - [docs/PROTOCOL.md](docs/PROTOCOL.md) — the complete wire contract
 - [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md) — what this defends against, and what it does not
 - [docs/RELEASING.md](docs/RELEASING.md) — how a release is cut

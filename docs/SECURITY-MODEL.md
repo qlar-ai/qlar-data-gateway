@@ -75,12 +75,25 @@ Schema discovery (`introspect`) is confined to catalog objects — `information_
 `pg_catalog`, `sys.*`, Oracle's `USER_*` views — so it cannot be used to read business data
 under cover of "looking at the schema".
 
+**Parquet files** (`DB_PROVIDER=parquet`) have no database to enforce anything, so the layers
+are rearranged. The gateway itself decides which files exist and what each table is called,
+and a statement may only name those tables: table functions (`read_parquet`, `read_csv`,
+`glob`, `query`, ...), file paths in `FROM`, and `COPY`/`ATTACH`/`INSTALL`/`PRAGMA`/`SET` are
+refused by the parser layer. The DuckDB instance is then locked — `allowed_directories` is
+the Parquet folder, `enable_external_access` is off, extension auto-loading is off and
+`lock_configuration` is on — so no statement can open another file or undo the lock. That
+directory restriction was measured to allow *writing* inside the folder, which is why the
+read-only guarantee there is the file system's: mount the folder read-only for the gateway.
+
 ### Resource protection
 
 - Server-side statement timeout (30 s default). A client-side timeout alone leaves the
   query running on your hardware.
 - Row ceiling and a 10 MB byte ceiling per result.
 - A concurrency cap, so a busy agent cannot open unbounded connections to your database.
+- For Parquet: a DuckDB memory ceiling (`PARQUET_MEMORY_LIMIT`, half the RAM by default),
+  a thread count, a capped spill folder, one query at a time, and the statement timeout
+  enforced by interrupting the query.
 
 ### Visibility
 

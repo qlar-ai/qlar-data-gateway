@@ -25,6 +25,7 @@ _PROVIDER_MODULES = {
     "mysql": "mysql",
     "sqlserver": "sqlserver",
     "oracle": "oracle",
+    "parquet": "parquet",
 }
 
 
@@ -48,6 +49,10 @@ def get_provider(name: str) -> Provider:
         from .oracle import OracleProvider
 
         return _ensure_driver(OracleProvider(), "oracledb", "oracle")
+    if key == "parquet":
+        from .parquet import ParquetProvider
+
+        return _ensure_driver(ParquetProvider(), "duckdb", "parquet")
 
     raise ValueError(f"unsupported provider {name!r}")
 
@@ -72,7 +77,13 @@ def _ensure_driver(provider: Provider, package: str, extra: str) -> Provider:
     """Turns a missing optional driver into an instruction rather than a traceback."""
     import importlib.util
 
-    modules = {"postgresql": "psycopg", "mysql": "pymysql", "sqlserver": "pymssql", "oracle": "oracledb"}
+    modules = {
+        "postgresql": "psycopg",
+        "mysql": "pymysql",
+        "sqlserver": "pymssql",
+        "oracle": "oracledb",
+        "parquet": "duckdb",
+    }
     module = modules[extra]
     if importlib.util.find_spec(module) is None:
         raise ImportError(

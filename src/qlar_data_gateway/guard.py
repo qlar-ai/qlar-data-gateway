@@ -34,6 +34,7 @@ DIALECTS = {
     "mysql": "mysql",
     "sqlserver": "tsql",
     "oracle": "oracle",
+    "parquet": "duckdb",
 }
 
 # Schemas that an `introspect` job is allowed to read. A schema-discovery job is still a
@@ -44,7 +45,14 @@ CATALOG_SCHEMAS = {
     "mysql": {"information_schema", "performance_schema", "mysql"},
     "sqlserver": {"information_schema", "sys"},
     "oracle": {"sys", "public"},
+    "parquet": {"information_schema"},
 }
+
+# Providers where every table reference must be a plain name. DuckDB treats anything in a
+# FROM clause that is not a known table as a way to read files - `read_parquet(...)`,
+# `read_csv(...)`, `glob(...)`, `query('...')`, or simply `FROM 'file.parquet'` - so there a
+# table function or a quoted path is refused outright, not judged by name.
+PLAIN_TABLES_ONLY = {"parquet"}
 
 # Oracle exposes its catalog as unqualified USER_*/ALL_*/DBA_* views rather than a schema,
 # so catalog detection there is by name prefix.
@@ -69,7 +77,48 @@ FORBIDDEN_NODES: tuple[type[exp.Expression], ...] = (
     exp.Rollback,
     exp.Set,
     exp.Into,  # SELECT ... INTO OUTFILE / INTO new_table
+) + tuple(
+    # DuckDB statements that write files, attach databases or load code. Looked up by name
+    # because older sqlglot releases do not model all of them; when a class is missing the
+    # statement still fails the SELECT-only root check below.
+    node
+    for node in (
+        getattr(exp, name, None) for name in ("Copy", "Pragma", "Attach", "Detach", "Install", "Export")
+    )
+    if isinstance(node, type)
 )
+
+# DuckDB functions that read files, list folders, run SQL from a string or read the
+# environment. Checked only for DuckDB-backed providers and only as function calls: names
+# like `query` or `glob` are far too common as column names to match as text.
+DUCKDB_FORBIDDEN_FUNCTIONS = {
+    "read_parquet",
+    "parquet_scan",
+    "parquet_metadata",
+    "parquet_file_metadata",
+    "parquet_kv_metadata",
+    "parquet_schema",
+    "read_csv",
+    "read_csv_auto",
+    "sniff_csv",
+    "read_json",
+    "read_json_auto",
+    "read_json_objects",
+    "read_ndjson",
+    "read_ndjson_auto",
+    "read_ndjson_objects",
+    "read_text",
+    "read_blob",
+    "read_xlsx",
+    "glob",
+    "query",
+    "query_table",
+    "getenv",
+    "duckdb_settings",
+    "duckdb_extensions",
+    "duckdb_secrets",
+    "which_secret",
+}
 
 # Functions and constructs that read files, write files, run programs or open sockets.
 # Matched on the function name a parser extracted, not on raw text, so `pg_read_file`
@@ -186,6 +235,8 @@ def check(
     _reject_forbidden_nodes(statement)
     _reject_non_select_root(statement)
     _reject_forbidden_functions(statement)
+    if provider in PLAIN_TABLES_ONLY:
+        _reject_file_access(statement)
 
     tables = referenced_tables(statement)
     if catalog_only:
@@ -224,6 +275,21 @@ def _reject_forbidden_functions(statement: exp.Expression) -> None:
         for forbidden in FORBIDDEN_FUNCTIONS:
             if text.startswith(f"{forbidden}.") or f".{forbidden}" in text:
                 raise SqlRejected(f"function {forbidden} is not allowed")
+
+
+def _reject_file_access(statement: exp.Expression) -> None:
+    """DuckDB only: every FROM item must be a table name, never a function or a path."""
+    for node in statement.find_all(exp.Func):
+        name = _function_name(node)
+        if name and name.lower() in DUCKDB_FORBIDDEN_FUNCTIONS:
+            raise SqlRejected(f"function {name} is not allowed; query the tables by name")
+
+    for table in statement.find_all(exp.Table):
+        if not isinstance(table.this, exp.Identifier):
+            raise SqlRejected("table functions are not allowed; query the tables by name")
+        name = table.name
+        if any(character in name for character in "./\\:*?"):
+            raise SqlRejected(f"reading {name!r} by path is not allowed; query the tables by name")
 
 
 def _function_name(node: exp.Func) -> str | None:

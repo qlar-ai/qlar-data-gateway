@@ -25,6 +25,7 @@ from urllib.parse import unquote, urlsplit
 
 from . import console
 from .config import (
+    FILE_PROVIDERS,
     SUPPORTED_PROVIDERS,
     ConfigError,
     Settings,
@@ -55,6 +56,8 @@ PROVIDER_ALIASES = {
     "sqlsrv": "sqlserver",
     "sql server": "sqlserver",
     "ora": "oracle",
+    "duckdb": "parquet",
+    "files": "parquet",
 }
 
 
@@ -162,8 +165,11 @@ def check_connection(settings: Settings, *, prominent: bool = False) -> bool:
     answer it is the first line of the log rather than the first failed query an hour later.
     """
     database = settings.database
-    port = database.port or default_port(database.provider)
-    address = f"{database.provider}://{database.user}@{database.host}:{port}/{database.database}"
+    if database.is_file_source:
+        address = database.describe()
+    else:
+        port = database.port or default_port(database.provider)
+        address = f"{database.provider}://{database.user}@{database.host}:{port}/{database.database}"
 
     if prominent:
         console.separator("TESTING THE DATABASE CONNECTION")
@@ -202,6 +208,18 @@ def check_connection(settings: Settings, *, prominent: bool = False) -> bool:
     # nobody should discover months later that the "read-only" gateway could drop tables.
     # Given its own block: following a success, a warning set in the same shape as the rest
     # reads as more of the success.
+    if database.is_file_source:
+        if account_can_write(database) is True:
+            console.warning(
+                "This process can modify the Parquet files",
+                "The gateway only ever runs SELECT statements, but a folder the gateway can only",
+                "read is the guarantee that does not depend on our code being right.",
+                "",
+                "Mount it read-only (docker: -v /data/parquet:/data:ro) or remove write access",
+                "for the account the gateway runs as.",
+            )
+        return True
+
     if account_can_write(database) is True:
         console.warning(
             "This database account appears able to modify data",
@@ -280,6 +298,9 @@ def _collect_answers(*, ask_endpoint: bool = True) -> dict[str, str]:
 
     provider = _ask_provider(_current("DB_PROVIDER").lower() or SUPPORTED_PROVIDERS[0], f"1/{total}")
 
+    if provider in FILE_PROVIDERS:
+        return _collect_parquet_answers(provider, ask_endpoint=ask_endpoint)
+
     # Nobody keeps the five parts of a connection separate in their head; they have a URL
     # from their DBA. Accept it whole and use its parts as the defaults below, still shown
     # one by one so that what was understood is visible before anything is saved.
@@ -319,6 +340,25 @@ def _collect_answers(*, ask_endpoint: bool = True) -> dict[str, str]:
         "DB_USER": user,
         "DB_PASSWORD": password,
     }
+
+
+def _collect_parquet_answers(provider: str, *, ask_endpoint: bool) -> dict[str, str]:
+    """A folder instead of a server: one question, plus the endpoint."""
+    total = 3 if ask_endpoint else 2
+    while True:
+        root = _ask("Folder with the Parquet files", _current("PARQUET_ROOT") or None, f"2/{total}")
+        if Path(root).expanduser().is_dir():
+            break
+        _complain(f"{root} is not a folder this process can see")
+
+    if ask_endpoint:
+        print()
+        console.heading("QLAR")
+        base_url = _ask("API endpoint", _current("QLAR_BASE_URL") or None, f"3/{total}").rstrip("/")
+    else:
+        base_url = _current("QLAR_BASE_URL").rstrip("/")
+
+    return {"QLAR_BASE_URL": base_url, "DB_PROVIDER": provider, "PARQUET_ROOT": root}
 
 
 def _current(name: str, *, strip: bool = True) -> str:

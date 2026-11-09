@@ -16,12 +16,22 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-SUPPORTED_PROVIDERS = ("postgresql", "mysql", "sqlserver", "oracle")
+SUPPORTED_PROVIDERS = ("postgresql", "mysql", "sqlserver", "oracle", "parquet")
+
+# Providers that read files on this machine rather than talking to a database server. They
+# have no host, user or password - only a folder - and run the query engine inside this
+# process, which is why their resource limits are settings of the gateway itself.
+FILE_PROVIDERS = ("parquet",)
 
 DEFAULT_STATEMENT_TIMEOUT_SECONDS = 30
 DEFAULT_POLL_TIMEOUT_SECONDS = 25
 DEFAULT_MAX_RESULT_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_CONCURRENT_QUERIES = 5
+# One DuckDB query already uses every thread it is given, so a second one beside it only
+# halves the speed of both and doubles the memory. Queue them instead.
+DEFAULT_MAX_CONCURRENT_FILE_QUERIES = 1
+DEFAULT_PARQUET_MEMORY_LIMIT = "50%"
+DEFAULT_PARQUET_MAX_TEMP_SIZE = "20GB"
 
 
 class ConfigError(Exception):
@@ -203,7 +213,12 @@ def _new_env_file_header() -> list[str]:
         "#TABLE_ALLOWLIST=              # when set, ONLY these tables can be read",
         "#DB_STATEMENT_TIMEOUT_SECONDS=30",
         "#MAX_RESULT_BYTES=10485760",
-        "#MAX_CONCURRENT_QUERIES=5",
+        "#MAX_CONCURRENT_QUERIES=5      # 1 when DB_PROVIDER=parquet",
+        "#PARQUET_TABLES_FILE=          # parquet: optional table names and descriptions",
+        "#PARQUET_MEMORY_LIMIT=50%      # parquet: DuckDB memory ceiling (size or % of RAM)",
+        "#PARQUET_THREADS=              # parquet: defaults to every core",
+        "#PARQUET_TEMP_DIR=             # parquet: spill folder, defaults beside the state file",
+        "#PARQUET_MAX_TEMP_SIZE=20GB",
         "#AUDIT_LOG_FILE=./audit/queries.jsonl",
         "#GATEWAY_KEY_FILE=./gateway-key.pem",
         "#GATEWAY_STATE_FILE=./gateway-state.json",
@@ -234,6 +249,43 @@ class DatabaseSettings:
     # widen it. Names are matched case-insensitively, schema-qualified where the database
     # has schemas.
     table_allowlist: frozenset[str] = frozenset()
+
+    # Only for `parquet`: where the files are and how much of this machine DuckDB may use.
+    parquet: ParquetSettings | None = None
+
+    @property
+    def is_file_source(self) -> bool:
+        return self.provider in FILE_PROVIDERS
+
+    def describe(self) -> str:
+        """Where this gateway reads from, for logs and setup output. Never the password."""
+        if self.parquet is not None:
+            return f"parquet://{self.parquet.root}"
+        port = f":{self.port}" if self.port else ""
+        return f"{self.provider}://{self.user}@{self.host}{port}/{self.database}"
+
+
+@dataclass(frozen=True)
+class ParquetSettings:
+    """A folder of Parquet files, queried in-process with DuckDB.
+
+    Attributes:
+        root: the folder. Each sub-folder (partitioned or not) and each `*.parquet` file
+            directly inside it becomes one table. Nothing outside it can be read.
+        tables_file: optional JSON or TOML file that renames, adds, excludes and describes
+            tables and columns. A relative path resolves against `root`.
+        memory_limit: DuckDB `memory_limit`, a size (`8GB`) or a share of RAM (`50%`).
+        threads: DuckDB `threads`; None keeps DuckDB's default of every core.
+        temp_dir: where DuckDB spills a query that does not fit in `memory_limit`.
+        max_temp_size: ceiling on that spill folder.
+    """
+
+    root: str
+    tables_file: str = ""
+    memory_limit: str = DEFAULT_PARQUET_MEMORY_LIMIT
+    threads: int | None = None
+    temp_dir: str = ""
+    max_temp_size: str = DEFAULT_PARQUET_MAX_TEMP_SIZE
 
 
 @dataclass(frozen=True)
@@ -334,29 +386,48 @@ def load_settings(env_file: Path | None = None) -> Settings:
             f"DB_PROVIDER must be one of {', '.join(SUPPORTED_PROVIDERS)}, got {provider or '(unset)'}"
         )
 
-    missing = [name for name in ("DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD") if not os.environ.get(name)]
-    if missing:
-        raise ConfigError(f"missing required database settings: {', '.join(missing)}")
-
-    port_raw = os.environ.get("DB_PORT", "").strip()
     allowlist = {
         name.strip().lower()
         for name in os.environ.get("TABLE_ALLOWLIST", "").split(",")
         if name.strip()
     }
+    state_file = Path(os.environ.get("GATEWAY_STATE_FILE", "./gateway-state.json")).expanduser()
+    statement_timeout = _env_int("DB_STATEMENT_TIMEOUT_SECONDS", DEFAULT_STATEMENT_TIMEOUT_SECONDS)
 
-    database = DatabaseSettings(
-        provider=provider,
-        host=os.environ["DB_HOST"].strip(),
-        port=int(port_raw) if port_raw else None,
-        database=os.environ["DB_NAME"].strip(),
-        user=os.environ["DB_USER"].strip(),
-        password=os.environ["DB_PASSWORD"],
-        options=_collect_db_options(),
-        statement_timeout_seconds=_env_int("DB_STATEMENT_TIMEOUT_SECONDS", DEFAULT_STATEMENT_TIMEOUT_SECONDS),
-        max_result_bytes=_env_int("MAX_RESULT_BYTES", DEFAULT_MAX_RESULT_BYTES),
-        table_allowlist=frozenset(allowlist),
-    )
+    if provider in FILE_PROVIDERS:
+        database = DatabaseSettings(
+            provider=provider,
+            host="",
+            port=None,
+            database="",
+            user="",
+            password="",
+            statement_timeout_seconds=statement_timeout,
+            max_result_bytes=_env_int("MAX_RESULT_BYTES", DEFAULT_MAX_RESULT_BYTES),
+            table_allowlist=frozenset(allowlist),
+            parquet=_load_parquet_settings(state_file),
+        )
+        default_concurrency = DEFAULT_MAX_CONCURRENT_FILE_QUERIES
+    else:
+        required = ("DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD")
+        missing = [name for name in required if not os.environ.get(name)]
+        if missing:
+            raise ConfigError(f"missing required database settings: {', '.join(missing)}")
+
+        port_raw = os.environ.get("DB_PORT", "").strip()
+        database = DatabaseSettings(
+            provider=provider,
+            host=os.environ["DB_HOST"].strip(),
+            port=int(port_raw) if port_raw else None,
+            database=os.environ["DB_NAME"].strip(),
+            user=os.environ["DB_USER"].strip(),
+            password=os.environ["DB_PASSWORD"],
+            options=_collect_db_options(),
+            statement_timeout_seconds=statement_timeout,
+            max_result_bytes=_env_int("MAX_RESULT_BYTES", DEFAULT_MAX_RESULT_BYTES),
+            table_allowlist=frozenset(allowlist),
+        )
+        default_concurrency = DEFAULT_MAX_CONCURRENT_QUERIES
 
     audit_raw = os.environ.get("AUDIT_LOG_FILE", "./audit/queries.jsonl").strip()
 
@@ -365,14 +436,45 @@ def load_settings(env_file: Path | None = None) -> Settings:
         gateway_name=os.environ.get("QLAR_GATEWAY_NAME", "").strip() or _default_gateway_name(),
         enrollment_code=(os.environ.get("QLAR_ENROLLMENT_CODE") or "").strip() or None,
         key_file=Path(os.environ.get("GATEWAY_KEY_FILE", "./gateway-key.pem")).expanduser(),
-        state_file=Path(os.environ.get("GATEWAY_STATE_FILE", "./gateway-state.json")).expanduser(),
+        state_file=state_file,
         audit_log_file=Path(audit_raw).expanduser() if audit_raw else None,
         poll_timeout_seconds=_env_int("POLL_TIMEOUT_SECONDS", DEFAULT_POLL_TIMEOUT_SECONDS),
-        max_concurrent_queries=_env_int("MAX_CONCURRENT_QUERIES", DEFAULT_MAX_CONCURRENT_QUERIES),
+        max_concurrent_queries=_env_int("MAX_CONCURRENT_QUERIES", default_concurrency),
         # Only ever disabled for testing against a local Qlar with a self-signed cert;
         # the flag is named so that it reads as a mistake in a production .env.
         verify_tls=_env_bool("QLAR_INSECURE_SKIP_TLS_VERIFY", False) is False,
         database=database,
+    )
+
+
+def _load_parquet_settings(state_file: Path) -> ParquetSettings:
+    """Reads the `PARQUET_*` settings, checking the folder exists before anything polls."""
+    root_raw = os.environ.get("PARQUET_ROOT", "").strip()
+    if not root_raw:
+        raise ConfigError("PARQUET_ROOT is required for DB_PROVIDER=parquet: the folder holding the files")
+
+    root = Path(root_raw).expanduser().resolve()
+    if not root.is_dir():
+        raise ConfigError(f"PARQUET_ROOT {root} is not a folder this process can see")
+
+    threads: int | None = None
+    if os.environ.get("PARQUET_THREADS", "").strip():
+        threads = _env_int("PARQUET_THREADS", 0)
+        if threads < 1:
+            raise ConfigError("PARQUET_THREADS must be 1 or more")
+
+    temp_raw = os.environ.get("PARQUET_TEMP_DIR", "").strip()
+    # Beside the state file by default: that is the one folder the operator has already
+    # given the gateway to write in (the /state volume in the container).
+    temp_dir = Path(temp_raw).expanduser() if temp_raw else state_file.parent / "duckdb-tmp"
+
+    return ParquetSettings(
+        root=str(root),
+        tables_file=os.environ.get("PARQUET_TABLES_FILE", "").strip(),
+        memory_limit=os.environ.get("PARQUET_MEMORY_LIMIT", "").strip() or DEFAULT_PARQUET_MEMORY_LIMIT,
+        threads=threads,
+        temp_dir=str(temp_dir.resolve()),
+        max_temp_size=os.environ.get("PARQUET_MAX_TEMP_SIZE", "").strip() or DEFAULT_PARQUET_MAX_TEMP_SIZE,
     )
 
 
