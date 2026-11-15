@@ -83,7 +83,7 @@ state volume, which the image already owns:
 ```bash
 chown -R 10001:10001 state     # the uid the image runs as
 docker run --rm -it -v "$PWD/state:/state" \
-  ghcr.io/qlar-ai/qlar-data-gateway:0.3.0 --env-file /state/.env test-db --init
+  ghcr.io/qlar-ai/qlar-data-gateway:0.4.0 --env-file /state/.env test-db --init
 ```
 
 That writes `state/.env`, which every later command then names the same way
@@ -94,7 +94,7 @@ running, so there is nothing to come back and type once it has been approved.
 ```bash
 docker run -d --name qlar-gateway --restart unless-stopped \
   --env-file .env -v "$PWD/state:/state" \
-  ghcr.io/qlar-ai/qlar-data-gateway:0.3.0 enroll
+  ghcr.io/qlar-ai/qlar-data-gateway:0.4.0 enroll
 
 docker logs -f qlar-gateway
 ```
@@ -123,8 +123,8 @@ sudo useradd --system --home /opt/qlar-gateway --shell /usr/sbin/nologin qlar
 sudo mkdir -p /opt/qlar-gateway && cd /opt/qlar-gateway
 sudo python3 -m venv venv
 sudo ./venv/bin/pip install --upgrade "qlar-data-gateway[postgresql] @ \
-  https://github.com/qlar-ai/qlar-data-gateway/releases/download/v0.3.0/qlar_data_gateway-0.3.0-py3-none-any.whl"
-sudo ./venv/bin/qlar-gateway version     # should print 0.3.0
+  https://github.com/qlar-ai/qlar-data-gateway/releases/download/v0.4.0/qlar_data_gateway-0.4.0-py3-none-any.whl"
+sudo ./venv/bin/qlar-gateway version     # should print 0.4.0
 sudo chown -R qlar:qlar /opt/qlar-gateway
 ```
 
@@ -173,6 +173,35 @@ sudo systemctl daemon-reload && sudo systemctl enable --now qlar-gateway
 journalctl -u qlar-gateway -f
 ```
 
+### Keeping the password in a systemd credential
+
+So that `.env` holds no working password, give it to systemd instead (systemd 250 or later).
+Encrypt it once, as root — `store-password` passes it to `systemd-creds` on stdin, never on
+the command line:
+
+```bash
+cd /opt/qlar-gateway
+sudo ./venv/bin/qlar-gateway store-password --source systemd-creds --from-env
+sudo chown qlar:qlar .env    # it was rewritten by root
+```
+
+or by hand: `sudo systemd-creds encrypt --name=db_password - /etc/credstore.encrypted/db_password`
+(type the password, then Ctrl-D), set `DB_PASSWORD_SOURCE=systemd-creds` in `.env` and delete
+`DB_PASSWORD` from it. Then add one line to the `[Service]` section of the unit:
+
+```ini
+LoadCredentialEncrypted=db_password:/etc/credstore.encrypted/db_password
+```
+
+systemd decrypts it at start into a private directory only this unit can read and hands the
+gateway its path; the encrypted file is bound to this machine (and its TPM, when it has one).
+`test-db` outside the unit cannot read it; check `journalctl -u qlar-gateway` after a restart
+instead.
+
+On Windows the equivalent is `qlar-gateway store-password --source dpapi --from-env`, run as
+the account that runs the gateway; with Docker or Kubernetes, mount the password as a secret
+file and set `DB_PASSWORD_SOURCE=file` and `DB_PASSWORD_FILE=/run/secrets/db_password`.
+
 The unit runs `run` rather than `enroll` because enrolling is a one-off that wants a
 terminal to show a fingerprint on: enrol by hand first with
 `qlar-gateway enroll --base-url ... --code ...`, approve it, then Ctrl-C and let systemd
@@ -201,7 +230,7 @@ spec:
     spec:
       containers:
         - name: gateway
-          image: ghcr.io/qlar-ai/qlar-data-gateway:0.3.0
+          image: ghcr.io/qlar-ai/qlar-data-gateway:0.4.0
           args: ["enroll"]   # idempotent: an enrolled pod goes straight to serving
           envFrom:
             - secretRef: { name: qlar-gateway-env }

@@ -117,7 +117,11 @@ Stated plainly, because a security control that is oversold is worse than none:
 - **Anyone who can read `gateway-key.pem` can impersonate this gateway** to Qlar. File
   permissions and host security are yours to maintain.
 - **Anyone who can modify `.env` has your database credentials.** Same boundary as any
-  application config on that host.
+  application config on that host. With `DB_PASSWORD_SOURCE` set to `dpapi`, `keyring` or
+  `systemd-creds` the file no longer contains the password — a copy of it (a backup, a
+  support bundle) reveals nothing usable — but code running as the gateway's own account can
+  still ask the keystore for it, exactly as the gateway does. A keystore protects the
+  password at rest, not from the account it belongs to.
 - **This is not a data-loss-prevention system.** It does not classify, mask or redact
   column contents.
 

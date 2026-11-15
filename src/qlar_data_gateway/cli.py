@@ -1,12 +1,13 @@
 """Command line: `qlar-gateway <command>`.
 
-Five commands, in the order an operator meets them:
+Six commands, in the order an operator meets them:
 
-    test-db      check the database credentials before involving Qlar at all
-    enroll       register with Qlar and serve — the only command most people need
-    fingerprint  print this gateway's key fingerprint, to compare with the CMS
-    run          serve, for a machine that is already enrolled
-    version      what is installed, and which protocol it speaks
+    test-db         check the database credentials before involving Qlar at all
+    enroll          register with Qlar and serve — the only command most people need
+    fingerprint     print this gateway's key fingerprint, to compare with the CMS
+    run             serve, for a machine that is already enrolled
+    store-password  move the database password out of .env into an OS keystore
+    version         what is installed, and which protocol it speaks
 
 `enroll` is the whole installation. It enrols if this machine is not enrolled yet, prints
 the fingerprint to compare, and then stays up and polls — including through the wait for
@@ -44,7 +45,16 @@ from .config import (
 )
 from .crypto import fingerprint, load_or_create_private_key, public_key_pem
 from .enroll import EnrollmentError, enroll
+from .masked_input import prompt_for_secret
 from .poll import PollLoop
+from .secret_store import (
+    SOURCE_SYSTEMD_CREDS,
+    WRITABLE_SOURCES,
+    password_source,
+    remove_password_from_env,
+    resolve_db_password,
+    store_db_password,
+)
 from .wizard import SetupAborted, ask_enrollment_code, can_prompt, check_connection, run_setup
 
 DEFAULT_ENV_FILE = ".env"
@@ -96,6 +106,20 @@ def main(argv: list[str] | None = None) -> int:
         subparsers.add_parser("test-db", help="verify the database settings without contacting Qlar")
     )
     subparsers.add_parser("fingerprint", help="print this gateway's public key fingerprint")
+    store_parser = subparsers.add_parser(
+        "store-password",
+        help="store the database password in an OS keystore instead of .env (DB_PASSWORD_SOURCE)",
+    )
+    store_parser.add_argument(
+        "--source",
+        choices=WRITABLE_SOURCES,
+        help="where to store it (default: DB_PASSWORD_SOURCE from .env)",
+    )
+    store_parser.add_argument(
+        "--from-env",
+        action="store_true",
+        help="move the DB_PASSWORD already in .env instead of asking for it, and delete it from .env",
+    )
     subparsers.add_parser("version", help="print version and protocol information")
 
     args = parser.parse_args(argv)
@@ -106,6 +130,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"qlar-gateway {__version__}")
         print(f"protocol {PROTOCOL_VERSION}")
         return 0
+
+    if args.command == "store-password":
+        # Before _settings_for: moving the password must work while the settings are
+        # incomplete - with DB_PASSWORD_SOURCE set and no password stored yet, they are.
+        return _command_store_password(Path(args.env_file), args.source, args.from_env)
 
     settings, connection_ok = _settings_for(args)
     if settings is None:
@@ -190,6 +219,88 @@ def _command_test_db(settings: Settings, connection_ok: bool | None) -> int:
     if connection_ok is None:
         connection_ok = check_connection(settings, prominent=True)
     return 0 if connection_ok else 1
+
+
+def _command_store_password(env_file: Path, source: str | None, from_env: bool) -> int:
+    """Puts the database password into an OS keystore and points `.env` at it.
+
+    In this order, so that a failure at any step leaves a working configuration: store the
+    password, read it back, then set DB_PASSWORD_SOURCE and delete DB_PASSWORD from `.env`.
+    """
+    try:
+        load_dotenv(env_file)
+        chosen = source or password_source()
+    except ConfigError as error:
+        print(f"configuration error: {error}", file=sys.stderr)
+        return 2
+
+    if chosen not in WRITABLE_SOURCES:
+        print(
+            f"choose where to store it: --source {' | '.join(WRITABLE_SOURCES)} "
+            "(or set DB_PASSWORD_SOURCE in .env)",
+            file=sys.stderr,
+        )
+        return 2
+
+    if from_env:
+        password = os.environ.get("DB_PASSWORD", "")
+        if not password:
+            print(f"DB_PASSWORD is not set in {env_file}; run without --from-env to type it", file=sys.stderr)
+            return 2
+    else:
+        if not can_prompt():
+            print("store-password needs a terminal to ask on, or --from-env", file=sys.stderr)
+            return 2
+        try:
+            password = prompt_for_secret("  Database password: ")
+            again = prompt_for_secret("  Same again:        ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            print("cancelled", file=sys.stderr)
+            return 2
+        if not password:
+            print("a password is required", file=sys.stderr)
+            return 2
+        if password != again:
+            print("the two entries differ; nothing was stored", file=sys.stderr)
+            return 1
+
+    try:
+        where = store_db_password(chosen, password)
+    except ConfigError as error:
+        print(f"could not store the password: {error}", file=sys.stderr)
+        return 1
+
+    # systemd decrypts the credential only inside the unit that loads it, so it cannot be
+    # read back from here; every other store is checked before .env stops carrying the
+    # password.
+    if chosen != SOURCE_SYSTEMD_CREDS:
+        environ = {key: value for key, value in os.environ.items() if key != "DB_PASSWORD"}
+        environ["DB_PASSWORD_SOURCE"] = chosen
+        try:
+            readable = resolve_db_password(environ) == password
+        except ConfigError as error:
+            print(f"stored, but could not be read back: {error}", file=sys.stderr)
+            return 1
+        if not readable:
+            print("stored, but what was read back differs; .env left unchanged", file=sys.stderr)
+            return 1
+
+    write_env_values(env_file, {"DB_PASSWORD_SOURCE": chosen})
+    removed = remove_password_from_env(env_file)
+    os.environ.pop("DB_PASSWORD", None)
+
+    console.field("stored in", where)
+    console.field("env file", f"{env_file}: DB_PASSWORD_SOURCE={chosen}")
+    if removed:
+        console.detail(f"DB_PASSWORD removed from {env_file}")
+    if chosen == SOURCE_SYSTEMD_CREDS:
+        console.detail(
+            "add to the gateway's unit:  LoadCredentialEncrypted="
+            f"{os.environ.get('DB_PASSWORD_CREDENTIAL') or 'db_password'}:{where.split(' ')[0]}"
+        )
+    console.detail("a real DB_PASSWORD environment variable, if one is set, must be removed too")
+    return 0
 
 
 def _command_fingerprint(settings: Settings) -> int:

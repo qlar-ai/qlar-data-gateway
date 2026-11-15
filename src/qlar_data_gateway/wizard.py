@@ -39,6 +39,15 @@ from .config import (
 from .executor import account_can_write, test_connection
 from .masked_input import prompt_for_secret
 from .providers import default_port
+from .secret_store import (
+    SOURCE_ENV,
+    WRITABLE_SOURCES,
+    forget_env_password,
+    password_source,
+    remove_password_from_env,
+    resolve_db_password,
+    store_db_password,
+)
 
 # No default. The endpoint differs per Qlar deployment, the CMS gateway panel prints the
 # right one, and a plausible-looking guess is worse than a question: it fails at enrolment
@@ -99,6 +108,7 @@ def run_setup(env_file: Path, *, ask_endpoint: bool = True, reason: str = "") ->
 
     while True:
         answers = _collect_answers(ask_endpoint=ask_endpoint)
+        _keep_password_out_of_env_file(env_file, answers)
         backup = write_env_values(env_file, answers)
         if backup is not None:
             print(f"\nThe previous {env_file} could not be read; it is kept as {backup}.")
@@ -130,6 +140,51 @@ def run_setup(env_file: Path, *, ask_endpoint: bool = True, reason: str = "") ->
             file=sys.stderr,
         )
         return settings, False
+
+
+def _keep_password_out_of_env_file(env_file: Path, answers: dict[str, str]) -> None:
+    """With a keystore configured, the password goes there and never into `.env`.
+
+    `DB_PASSWORD_SOURCE=keyring` or `dpapi`: the answer is stored in that keystore, and any
+    `DB_PASSWORD` line left in the file from before is removed - the point of the keystore is
+    that the file no longer holds the credential. The other sources (`systemd-creds`, `file`)
+    are filled by whatever runs the gateway, so the prompts did not ask for a password at all.
+    """
+    source = _password_source_or_env()
+    if source == SOURCE_ENV:
+        return
+
+    password = answers.pop("DB_PASSWORD", "")
+    if password and source in WRITABLE_SOURCES:
+        try:
+            where = store_db_password(source, password)
+        except ConfigError as error:
+            raise SetupAborted(f"could not store the password: {error}") from error
+        print(f"\nPassword stored in {where}.")
+
+    if remove_password_from_env(env_file):
+        print(f"Removed DB_PASSWORD from {env_file}: DB_PASSWORD_SOURCE={source} holds it now.")
+    forget_env_password()
+
+
+def _password_source_or_env() -> str:
+    try:
+        return password_source()
+    except ConfigError:
+        # An unknown source is reported by load_settings with the full message; the prompts
+        # carry on as if none was set rather than failing before asking anything.
+        return SOURCE_ENV
+
+
+def _password_in_store(source: str) -> str:
+    """The password currently in the keystore, or "" when there is none (yet)."""
+    try:
+        # Read with DB_PASSWORD hidden: a leftover line in .env must not make the keystore
+        # look unreadable while the prompts are about to fix exactly that.
+        environ = {key: value for key, value in os.environ.items() if key != "DB_PASSWORD"}
+        return resolve_db_password(environ)
+    except ConfigError:
+        return ""
 
 
 def ask_enrollment_code() -> str:
@@ -314,12 +369,21 @@ def _collect_answers(*, ask_endpoint: bool = True) -> dict[str, str]:
     database = _ask("Database name", pasted.get("database") or _current("DB_NAME") or None, f"4/{total}")
     user = _ask("Username", pasted.get("user") or _current("DB_USER") or None, f"5/{total}")
 
-    url_password = pasted.get("password")
-    saved_password = _current("DB_PASSWORD", strip=False)
-    keep_label = "from the URL" if url_password else ("unchanged" if saved_password else None)
-    password = _ask_secret("Password", keep_label=keep_label, number=f"6/{total}") or (
-        url_password or saved_password
-    )
+    source = _password_source_or_env()
+    if source == SOURCE_ENV or source in WRITABLE_SOURCES:
+        url_password = pasted.get("password")
+        saved_password = (
+            _current("DB_PASSWORD", strip=False) if source == SOURCE_ENV else _password_in_store(source)
+        )
+        keep_label = "from the URL" if url_password else ("unchanged" if saved_password else None)
+        password = _ask_secret("Password", keep_label=keep_label, number=f"6/{total}") or (
+            url_password or saved_password
+        )
+    else:
+        # systemd-creds / file: the unit or the container provides the password; there is
+        # nothing for these prompts to write.
+        print(f"  6/{total}  Password      provided by DB_PASSWORD_SOURCE={source}")
+        password = ""
 
     if ask_endpoint:
         # No paragraph explaining what this is: the endpoint reaches almost everyone as

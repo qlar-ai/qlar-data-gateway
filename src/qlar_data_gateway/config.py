@@ -4,7 +4,9 @@ Two files, with deliberately different lifetimes:
 
 * `.env` — written by the operator, or by the setup prompts on first run (see
   `wizard.py`). Qlar's URL, the one-time enrolment code, and the database credentials.
-  **The database credentials live here and only here**; they are never sent to Qlar.
+  **The database credentials live on this machine only**; they are never sent to Qlar.
+  The password may instead live in an OS keystore (`DB_PASSWORD_SOURCE`, see
+  `secret_store.py`), so that `.env` itself holds no working credential.
 * `gateway-state.json` — written by the gateway at enrolment. The gateway id Qlar issued
   and Qlar's public key, pinned so later jobs can be verified.
 """
@@ -235,7 +237,9 @@ class DatabaseSettings:
     port: int | None
     database: str
     user: str
-    password: str
+    # Left out of repr() so that a settings object printed while debugging, or caught in a
+    # traceback's locals, does not carry the password with it.
+    password: str = field(repr=False)
     # Provider-specific connect options, e.g. sslmode for PostgreSQL or an Oracle service
     # name. Kept as a plain mapping so a customer can pass something we did not anticipate
     # without waiting for a release.
@@ -409,10 +413,21 @@ def load_settings(env_file: Path | None = None) -> Settings:
         )
         default_concurrency = DEFAULT_MAX_CONCURRENT_FILE_QUERIES
     else:
-        required = ("DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD")
+        # Imported here: secret_store imports ConfigError from this module.
+        from .secret_store import SOURCE_ENV, password_source, resolve_db_password
+
+        # The password is required too, but it may come from a keystore instead of
+        # DB_PASSWORD (see secret_store.py). With the default source the message is exactly
+        # what it always was, DB_PASSWORD included.
+        source = password_source()
+        required = ("DB_HOST", "DB_NAME", "DB_USER")
         missing = [name for name in required if not os.environ.get(name)]
+        if source == SOURCE_ENV and not os.environ.get("DB_PASSWORD"):
+            missing.append("DB_PASSWORD")
         if missing:
             raise ConfigError(f"missing required database settings: {', '.join(missing)}")
+
+        password = resolve_db_password()
 
         port_raw = os.environ.get("DB_PORT", "").strip()
         database = DatabaseSettings(
@@ -421,7 +436,7 @@ def load_settings(env_file: Path | None = None) -> Settings:
             port=int(port_raw) if port_raw else None,
             database=os.environ["DB_NAME"].strip(),
             user=os.environ["DB_USER"].strip(),
-            password=os.environ["DB_PASSWORD"],
+            password=password,
             options=_collect_db_options(),
             statement_timeout_seconds=statement_timeout,
             max_result_bytes=_env_int("MAX_RESULT_BYTES", DEFAULT_MAX_RESULT_BYTES),

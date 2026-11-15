@@ -11,6 +11,25 @@ does not change the protocol version.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-16
+
+### Added
+
+- **The database password can live in an OS keystore instead of `.env`**
+  (`DB_PASSWORD_SOURCE`): `dpapi` (a file sealed with Windows DPAPI, no extra package),
+  `keyring` (Windows Credential Manager / macOS Keychain / Secret Service, new `[keystore]`
+  extra), `systemd-creds` (`LoadCredentialEncrypted=`), or `file` (Docker / Kubernetes secret
+  file). The default stays `env`: an existing `.env` with `DB_PASSWORD` works unchanged.
+- `qlar-gateway store-password [--source ...] [--from-env]` stores the password, reads it
+  back, then sets `DB_PASSWORD_SOURCE` in `.env` and deletes `DB_PASSWORD` from it. The setup
+  prompts store the answer in the keystore when one is configured.
+- With a keystore configured, a `DB_PASSWORD` that is still set is refused at start, so a
+  half-finished move cannot leave the plaintext copy behind.
+
+### Changed
+
+- The database password is no longer part of the settings object's `repr()`.
+
 ## [0.3.0] - 2026-11-10
 
 ### Added
@@ -322,7 +341,8 @@ Protocol version 1.
 - `test-db`, `enroll`, `fingerprint`, `run` and `version` commands, a Docker image, and
   systemd/Kubernetes deployment guides.
 
-[Unreleased]: https://github.com/qlar-ai/qlar-data-gateway/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/qlar-ai/qlar-data-gateway/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/qlar-ai/qlar-data-gateway/releases/tag/v0.4.0
 [0.3.0]: https://github.com/qlar-ai/qlar-data-gateway/releases/tag/v0.3.0
 [0.2.2]: https://github.com/qlar-ai/qlar-data-gateway/releases/tag/v0.2.2
 [0.2.1]: https://github.com/qlar-ai/qlar-data-gateway/releases/tag/v0.2.1

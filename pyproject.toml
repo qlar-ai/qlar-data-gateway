@@ -36,6 +36,9 @@ sqlserver = ["pymssql>=2.3"]
 oracle = ["oracledb>=2.2"]
 # DuckDB reads the files; pytz is what DuckDB needs to hand back TIMESTAMP WITH TIME ZONE.
 parquet = ["duckdb>=1.2", "pytz>=2023.3"]
+# Optional OS keystore for the database password (DB_PASSWORD_SOURCE=keyring): Windows
+# Credential Manager, macOS Keychain, Secret Service. DPAPI and systemd-creds need nothing extra.
+keystore = ["keyring>=24"]
 all = [
     "psycopg[binary]>=3.1", "PyMySQL>=1.1", "pymssql>=2.3", "oracledb>=2.2", "duckdb>=1.2", "pytz>=2023.3",
 ]

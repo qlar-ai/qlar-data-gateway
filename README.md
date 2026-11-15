@@ -64,15 +64,15 @@ of the allowlist.
 Docker (recommended — no Python on the host):
 
 ```bash
-docker pull ghcr.io/qlar-ai/qlar-data-gateway:0.3.0
+docker pull ghcr.io/qlar-ai/qlar-data-gateway:0.4.0
 ```
 
 Or with pip, installing only the driver you need. The wheel comes from the release rather
 than from PyPI, where this package is not published:
 
 ```bash
-pip install --upgrade "qlar-data-gateway[postgresql] @ https://github.com/qlar-ai/qlar-data-gateway/releases/download/v0.3.0/qlar_data_gateway-0.3.0-py3-none-any.whl"
-qlar-gateway version     # should print 0.3.0
+pip install --upgrade "qlar-data-gateway[postgresql] @ https://github.com/qlar-ai/qlar-data-gateway/releases/download/v0.4.0/qlar_data_gateway-0.4.0-py3-none-any.whl"
+qlar-gateway version     # should print 0.4.0
 ```
 
 Swap `postgresql` for `mysql`, `sqlserver`, `oracle`, `parquet` (a folder of Parquet files, see
@@ -168,7 +168,7 @@ Docker, which needs the fingerprint out of the logs because the container is det
 ```bash
 docker run -d --name qlar-gateway --restart unless-stopped \
   --env-file .env -v "$PWD/state:/state" \
-  ghcr.io/qlar-ai/qlar-data-gateway:0.3.0 enroll
+  ghcr.io/qlar-ai/qlar-data-gateway:0.4.0 enroll
 
 docker logs -f qlar-gateway   # read the fingerprint, approve, watch it connect
 ```
@@ -187,6 +187,7 @@ normal. Full walkthrough including systemd and Kubernetes: [docs/INSTALL.md](doc
 | `qlar-gateway enroll` | register with Qlar and serve — the only command most people need |
 | `qlar-gateway fingerprint` | print the key fingerprint to compare with the CMS |
 | `qlar-gateway run` | serve, for a machine that is already enrolled |
+| `qlar-gateway store-password` | move the database password out of `.env` into an OS keystore |
 | `qlar-gateway version` | release version and protocol version |
 
 `run`, `test-db` and `enroll` take `--init`, which asks for the database details again and
@@ -207,6 +208,7 @@ the questions entirely.
 | `DB_PROVIDER` | — | `postgresql`, `mysql`, `sqlserver`, `oracle`, `parquet` |
 | `PARQUET_ROOT` and `PARQUET_*` | — | for `parquet` only, instead of `DB_HOST`…: see [docs/PARQUET.md](docs/PARQUET.md) |
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | — | connection details |
+| `DB_PASSWORD_SOURCE` | `env` | where the password comes from: `env` (`DB_PASSWORD`), `keyring`, `dpapi`, `systemd-creds`, `file` — see below |
 | `DB_OPT_*` | — | extra driver options, e.g. `DB_OPT_SSLMODE=verify-full` |
 | `DB_STATEMENT_TIMEOUT_SECONDS` | `30` | server-side statement timeout |
 | `MAX_RESULT_BYTES` | `10485760` | ceiling on one result |
@@ -216,6 +218,36 @@ the questions entirely.
 | `POLL_TIMEOUT_SECONDS` | `25` | long-poll hold time |
 | `GATEWAY_KEY_FILE` | `./gateway-key.pem` | private key location |
 | `GATEWAY_STATE_FILE` | `./gateway-state.json` | gateway id + pinned Qlar public key |
+
+### Keeping the password out of `.env`
+
+By default the database password is `DB_PASSWORD` in `.env`, protected by the file's
+mode 0600. To keep it in something the operating system protects instead — so a backup or
+a copied `.env` no longer carries a working credential — set `DB_PASSWORD_SOURCE` and store
+the password once:
+
+```bash
+qlar-gateway store-password --source dpapi --from-env    # Windows: moves DB_PASSWORD out of .env
+qlar-gateway store-password --source keyring             # asks for it; needs the [keystore] extra
+```
+
+`store-password` stores the password, reads it back, writes `DB_PASSWORD_SOURCE` to `.env`
+and deletes `DB_PASSWORD` from it, in that order. Run it as the account that runs the
+gateway: DPAPI and most keyrings only open for the account that wrote them.
+
+| `DB_PASSWORD_SOURCE` | Where the password is | Settings (defaults) |
+|---|---|---|
+| `env` (default) | `DB_PASSWORD`, exactly as before | — |
+| `dpapi` | a file sealed with Windows DPAPI for this user, or this machine | `DB_PASSWORD_DPAPI_FILE` (`./db-password.dpapi`), `DB_PASSWORD_DPAPI_SCOPE` (`user` \| `machine`) |
+| `keyring` | Windows Credential Manager, macOS Keychain, or the Secret Service (`pip install 'qlar-data-gateway[keystore]'`) | `DB_PASSWORD_KEYRING_SERVICE` (`qlar-data-gateway`), `DB_PASSWORD_KEYRING_ENTRY` (`db_password`) |
+| `systemd-creds` | a systemd credential, decrypted by systemd for this unit only (systemd 250+) | `DB_PASSWORD_CREDENTIAL` (`db_password`), `DB_PASSWORD_CREDENTIAL_FILE` (`/etc/credstore.encrypted/db_password`, for `store-password`) |
+| `file` | a file holding only the password — a Docker or Kubernetes secret | `DB_PASSWORD_FILE` |
+
+With any source other than `env`, a `DB_PASSWORD` that is still set is a configuration error
+rather than a silent preference, so a half-finished move cannot leave the plaintext copy
+behind unnoticed. The setup prompts (`--init`) follow the setting too: with `keyring` or
+`dpapi` they store the answer there and never write it to `.env`. See
+[docs/INSTALL.md](docs/INSTALL.md) for the systemd unit lines.
 
 ## Operating notes
 
