@@ -11,6 +11,8 @@ does not change the protocol version.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-16
+
 ### Added
 
 - **The database password can live in an OS keystore instead of `.env`**
@@ -339,7 +341,8 @@ Protocol version 1.
 - `test-db`, `enroll`, `fingerprint`, `run` and `version` commands, a Docker image, and
   systemd/Kubernetes deployment guides.
 
-[Unreleased]: https://github.com/qlar-ai/qlar-data-gateway/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/qlar-ai/qlar-data-gateway/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/qlar-ai/qlar-data-gateway/releases/tag/v0.4.0
 [0.3.0]: https://github.com/qlar-ai/qlar-data-gateway/releases/tag/v0.3.0
 [0.2.2]: https://github.com/qlar-ai/qlar-data-gateway/releases/tag/v0.2.2
 [0.2.1]: https://github.com/qlar-ai/qlar-data-gateway/releases/tag/v0.2.1

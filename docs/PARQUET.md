@@ -10,7 +10,7 @@ gateway: the work happens on hardware you chose and sized, not in Qlar's cloud.
 ## Install
 
 ```bash
-pip install "qlar-data-gateway[parquet] @ https://github.com/qlar-ai/qlar-data-gateway/releases/download/v0.3.0/qlar_data_gateway-0.3.0-py3-none-any.whl"
+pip install "qlar-data-gateway[parquet] @ https://github.com/qlar-ai/qlar-data-gateway/releases/download/v0.4.0/qlar_data_gateway-0.4.0-py3-none-any.whl"
 qlar-gateway enroll --base-url <from the CMS> --code <from the CMS>
 #   Database type: parquet        (or 5)
 #   Folder with the Parquet files: /data/parquet
@@ -26,7 +26,7 @@ echo PARQUET_ROOT=/data >> .env
 
 docker run -d --name qlar-gateway --restart unless-stopped \
   --env-file .env -v "$PWD/state:/state" -v "/srv/parquet:/data:ro" \
-  ghcr.io/qlar-ai/qlar-data-gateway:0.3.0 enroll
+  ghcr.io/qlar-ai/qlar-data-gateway:0.4.0 enroll
 docker logs -f qlar-gateway
 ```
 
