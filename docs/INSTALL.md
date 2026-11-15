@@ -173,6 +173,35 @@ sudo systemctl daemon-reload && sudo systemctl enable --now qlar-gateway
 journalctl -u qlar-gateway -f
 ```
 
+### Keeping the password in a systemd credential
+
+So that `.env` holds no working password, give it to systemd instead (systemd 250 or later).
+Encrypt it once, as root — `store-password` passes it to `systemd-creds` on stdin, never on
+the command line:
+
+```bash
+cd /opt/qlar-gateway
+sudo ./venv/bin/qlar-gateway store-password --source systemd-creds --from-env
+sudo chown qlar:qlar .env    # it was rewritten by root
+```
+
+or by hand: `sudo systemd-creds encrypt --name=db_password - /etc/credstore.encrypted/db_password`
+(type the password, then Ctrl-D), set `DB_PASSWORD_SOURCE=systemd-creds` in `.env` and delete
+`DB_PASSWORD` from it. Then add one line to the `[Service]` section of the unit:
+
+```ini
+LoadCredentialEncrypted=db_password:/etc/credstore.encrypted/db_password
+```
+
+systemd decrypts it at start into a private directory only this unit can read and hands the
+gateway its path; the encrypted file is bound to this machine (and its TPM, when it has one).
+`test-db` outside the unit cannot read it; check `journalctl -u qlar-gateway` after a restart
+instead.
+
+On Windows the equivalent is `qlar-gateway store-password --source dpapi --from-env`, run as
+the account that runs the gateway; with Docker or Kubernetes, mount the password as a secret
+file and set `DB_PASSWORD_SOURCE=file` and `DB_PASSWORD_FILE=/run/secrets/db_password`.
+
 The unit runs `run` rather than `enroll` because enrolling is a one-off that wants a
 terminal to show a fingerprint on: enrol by hand first with
 `qlar-gateway enroll --base-url ... --code ...`, approve it, then Ctrl-C and let systemd
