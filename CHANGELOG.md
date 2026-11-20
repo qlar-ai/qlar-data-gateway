@@ -11,6 +11,24 @@ does not change the protocol version.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-21
+
+### Security
+
+- The guard now refuses everything Qlar's own SQL guard refuses (security review Plugins-pack wave 2), so a
+  compromised Qlar still cannot use these routes through the gateway:
+  - MySQL executable comments `/*! ... */` and optimizer hints `/*+ ... */` (sqlglot reads both as comments, MySQL
+    runs or reads them).
+  - A backslash in front of a quote for MySQL and PostgreSQL, where server settings decide whether it escapes.
+  - More PostgreSQL, MySQL, SQL Server and DuckDB functions (settings, server control, XML exporters, named locks,
+    sequence writes, file and log readers) and whole families by prefix (`pg_ls_`, `pg_advisory`, `lo_`, `dblink`,
+    Oracle `UTL_`/`DBMS_`, SQL Server `xp_`/`sp_`, DuckDB `read_`/`parquet_`/`http`), including Oracle package members
+    read without parentheses.
+  - Locking reads (`FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`) and SQL Server locking table hints (`UPDLOCK`,
+    `HOLDLOCK`, `XLOCK`, `TABLOCK`, ...).
+- No change for legitimate queries: over 4,389 real successful SqlDbReader queries the new guard refuses nothing the
+  0.4.0 guard passed. No protocol change.
+
 ## [0.4.0] - 2026-11-16
 
 ### Added

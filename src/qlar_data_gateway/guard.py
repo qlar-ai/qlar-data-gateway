@@ -83,7 +83,8 @@ FORBIDDEN_NODES: tuple[type[exp.Expression], ...] = (
     # statement still fails the SELECT-only root check below.
     node
     for node in (
-        getattr(exp, name, None) for name in ("Copy", "Pragma", "Attach", "Detach", "Install", "Export")
+        getattr(exp, name, None)
+        for name in ("Copy", "Pragma", "Attach", "Detach", "Install", "Export", "Lock")
     )
     if isinstance(node, type)
 )
@@ -114,6 +115,12 @@ DUCKDB_FORBIDDEN_FUNCTIONS = {
     "query",
     "query_table",
     "getenv",
+    "iceberg_scan",
+    "delta_scan",
+    "sqlite_scan",
+    "postgres_scan",
+    "mysql_scan",
+    "current_setting",
     "duckdb_settings",
     "duckdb_extensions",
     "duckdb_secrets",
@@ -166,6 +173,68 @@ FORBIDDEN_FUNCTIONS = {
     "dbms_lock",
     "httpuritype",
     "dbms_xmlgen",
+    # Added in 0.4.1 to match Qlar's own guard (security review Plugins-pack wave 2):
+    # PostgreSQL settings, server control, XML exporters that run queries from a string,
+    # notifications and sequence writes.
+    "set_config",
+    "current_setting",
+    "query_to_xml_and_xmlschema",
+    "query_to_xmlschema",
+    "cursor_to_xml",
+    "cursor_to_xmlschema",
+    "table_to_xml",
+    "table_to_xml_and_xmlschema",
+    "schema_to_xml",
+    "database_to_xml",
+    "database_to_xml_and_xmlschema",
+    "pg_reload_conf",
+    "pg_rotate_logfile",
+    "pg_promote",
+    "pg_switch_wal",
+    "pg_create_restore_point",
+    "pg_logical_emit_message",
+    "pg_import_system_collations",
+    "pg_current_logfile",
+    "pg_notify",
+    "nextval",
+    "setval",
+    # MySQL UDF shells, named locks, replication waits
+    "sys_exec",
+    "sys_eval",
+    "get_lock",
+    "release_lock",
+    "release_all_locks",
+    "is_free_lock",
+    "is_used_lock",
+    "master_pos_wait",
+    "source_pos_wait",
+    "uuid_short",
+    # SQL Server file and log readers
+    "fn_trace_gettable",
+    "fn_xe_file_target_read_file",
+    "fn_get_audit_file",
+    "fn_dblog",
+    "fn_dump_dblog",
+    "openxml",
+}
+
+# Whole families refused per provider by name prefix (0.4.1, same lists as Qlar's guard):
+# every PostgreSQL file/advisory-lock/large-object helper, every Oracle UTL_/DBMS_ package,
+# every SQL Server extended or system procedure, every DuckDB reader or HTTP helper.
+FORBIDDEN_PREFIXES: dict[str, tuple[str, ...]] = {
+    "postgresql": (
+        "pg_ls_", "pg_file_", "pg_sleep", "pg_advisory", "pg_try_advisory", "lo_", "dblink", "pg_stat_reset",
+    ),
+    "mysql": (),
+    "oracle": ("utl_", "dbms_", "ordsys"),
+    "sqlserver": ("xp_", "sp_"),
+    "parquet": ("read_", "parquet_", "duckdb_secrets", "http"),
+}
+
+# SQL Server table hints that take or hold locks. A read-only gateway has no business blocking
+# the customer's own writers (0.4.1).
+LOCKING_TABLE_HINTS = {
+    "updlock", "xlock", "tablock", "tablockx", "holdlock", "paglock", "serializable", "repeatableread",
 }
 
 # A textual backstop for constructs that are not a single function call and that some
@@ -220,6 +289,9 @@ def check(
         if pattern.search(sql):
             raise SqlRejected(f"statement matches a forbidden construct: {pattern.pattern}")
 
+    _reject_ambiguous_backslash(sql, provider)
+    _reject_executable_comments(sql)
+
     try:
         statements = [statement for statement in sqlglot.parse(sql, dialect=dialect) if statement is not None]
     except Exception as error:  # sqlglot raises several unrelated types
@@ -234,7 +306,8 @@ def check(
     statement = statements[0]
     _reject_forbidden_nodes(statement)
     _reject_non_select_root(statement)
-    _reject_forbidden_functions(statement)
+    _reject_forbidden_functions(statement, provider)
+    _reject_locking_hints(statement)
     if provider in PLAIN_TABLES_ONLY:
         _reject_file_access(statement)
 
@@ -262,10 +335,67 @@ def _reject_non_select_root(statement: exp.Expression) -> None:
         raise SqlRejected(f"only SELECT statements are allowed, got {type(root).__name__.upper()}")
 
 
-def _reject_forbidden_functions(statement: exp.Expression) -> None:
+def _reject_ambiguous_backslash(sql: str, provider: str) -> None:
+    """MySQL and PostgreSQL servers can each be configured to treat a backslash in a string as an
+    escape or as a plain character (``NO_BACKSLASH_ESCAPES``, ``standard_conforming_strings``).
+    Where a backslash sits in front of a quote, the parser and the server may then disagree on
+    where the string ends, so the statement is refused rather than guessed at (0.4.1).
+    """
+    if provider in ("mysql", "postgresql") and "\\'" in sql:
+        raise SqlRejected("a backslash in front of a quote is not allowed; servers disagree on what it means")
+
+
+def _reject_executable_comments(sql: str) -> None:
+    """MySQL runs the body of ``/*! ... */`` and reads ``/*+ ... */`` as optimizer hints. sqlglot
+    treats both as comments, so a function hidden there would never reach the function check
+    (0.4.1). Qlar strips every comment before it sends a statement, so a legitimate job never
+    carries one.
+    """
+    if _EXECUTABLE_COMMENT.search(_blank_literals(sql)):
+        raise SqlRejected("executable comments (/*! */, /*+ */) are not allowed")
+
+
+_EXECUTABLE_COMMENT = re.compile(r"/\*[!+]")
+
+
+def _blank_literals(sql: str) -> str:
+    """The statement with the contents of quoted strings and identifiers replaced by spaces, so a
+    textual check only sees SQL structure. Doubled quotes stay inside the literal; a backslash in
+    front of a quote is refused before this runs where it would matter."""
+    out: list[str] = []
+    closing = {"'": "'", '"': '"', "`": "`", "[": "]"}
+    i, n = 0, len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch in closing:
+            end = closing[ch]
+            out.append(ch)
+            i += 1
+            while i < n:
+                if sql[i] == end:
+                    if end != "]" and i + 1 < n and sql[i + 1] == end:
+                        out.append("  ")
+                        i += 2
+                        continue
+                    break
+                out.append(" ")
+                i += 1
+            if i < n:
+                out.append(sql[i])
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _reject_forbidden_functions(statement: exp.Expression, provider: str = "") -> None:
+    prefixes = FORBIDDEN_PREFIXES.get(provider, ())
     for node in statement.find_all(exp.Func):
         name = _function_name(node)
         if name and name.lower() in FORBIDDEN_FUNCTIONS:
+            raise SqlRejected(f"function {name} is not allowed")
+        if name and prefixes and name.lower().startswith(prefixes):
             raise SqlRejected(f"function {name} is not allowed")
 
     # Package-qualified calls (Oracle's UTL_FILE.FOPEN, SQL Server's sys.xp_cmdshell)
@@ -275,6 +405,30 @@ def _reject_forbidden_functions(statement: exp.Expression) -> None:
         for forbidden in FORBIDDEN_FUNCTIONS:
             if text.startswith(f"{forbidden}.") or f".{forbidden}" in text:
                 raise SqlRejected(f"function {forbidden} is not allowed")
+        for part in text.replace('"', "").replace("[", "").replace("]", "").split("."):
+            if prefixes and part.startswith(prefixes):
+                raise SqlRejected(f"function {part} is not allowed")
+
+
+    # Oracle package members read without parentheses (DBMS_RANDOM.VALUE, UTL_INADDR.GET_HOST_NAME)
+    # parse as a column of a "table" named after the package. Only Oracle: elsewhere a table alias
+    # such as lo_orders is ordinary.
+    if provider == "oracle":
+        for column in statement.find_all(exp.Column):
+            qualifier = (column.table or "").lower()
+            if qualifier and qualifier.startswith(prefixes):
+                raise SqlRejected(f"package {column.table} is not allowed")
+
+
+def _reject_locking_hints(statement: exp.Expression) -> None:
+    """SQL Server ``WITH (UPDLOCK)`` and friends (0.4.1)."""
+    hint_type = getattr(exp, "WithTableHint", None)
+    if not isinstance(hint_type, type):
+        return
+    for hint in statement.find_all(hint_type):
+        for item in hint.expressions:
+            if item.sql().strip().lower().split("(")[0] in LOCKING_TABLE_HINTS:
+                raise SqlRejected(f"table hint {item.sql()} takes a lock; only plain reads are allowed")
 
 
 def _reject_file_access(statement: exp.Expression) -> None:
